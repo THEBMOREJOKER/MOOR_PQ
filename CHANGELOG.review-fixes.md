@@ -1,8 +1,25 @@
-# MOOR_PQ — source review fixes, `review-fixes` branch
+# MOOR_PQ — source review fixes, `upstream-fixes` branch
 
 A source review of this tree, carried out 2026-09-11 and fixed 2026-09-12, against
-upstream `6fd7743` (`0xdeadbeefnetwork/MOOR_PQ`). Everything below is on the
-`review-fixes` branch of this fork; `main` here is left equal to upstream.
+upstream `6fd7743` (`0xdeadbeefnetwork/MOOR_PQ`). `main` in this fork is left equal
+to upstream.
+
+**Everything on this branch is protocol-compatible with the version upstream runs.**
+The wire format, the cell sizes, the descriptor layout and `MOOR_PROTOCOL_VERSION`
+(4) are untouched, and `moor_crypto_pq_seal()` is byte-identical to upstream's. A
+relay or client built from this branch interoperates with an unpatched network, so
+the fixes can be taken one at a time and in any order, with no coordination.
+
+Two changes from the same review are deliberately **not** here, because they are
+not compatible in that sense and belong to a separate discussion:
+
+- Binding the KEM ciphertext into `pq_seal`, which fixes a real weakness but
+  changes the sealed format, so it requires a protocol version bump and a
+  coordinated upgrade of the whole network.
+- Removing the ability to disable hybrid PQ, and enforcing the existing protocol
+  floor at client relay selection as well as at the directory authority. Neither
+  changes a wire format, but a client doing both refuses relays an unpatched
+  network still contains, which is a deployment decision rather than a fix.
 
 **Finding numbers in this file are not the same series as
 `CHANGELOG.audit-fixes.md`.** That file covers a separate audit of 2026-08-09 with
@@ -14,19 +31,6 @@ finding is only counted closed when a regression test covers it; the suite is
 `./tests/run-review-tests.sh`, nine binaries, one of them under AddressSanitizer.
 
 ---
-
-## ⚠️ This branch bumps the wire protocol to 5 — it is a flag day
-
-`moor_crypto_pq_seal()` now binds the KEM ciphertext into the sealed blob, so a
-v4 peer cannot open a v5 seal. `MOOR_PROTOCOL_VERSION` and
-`MOOR_MIN_PROTOCOL_VERSION` both move to 5, and the floor is enforced at client
-relay selection as well as at the directory authority.
-
-**A client running this branch refuses to build circuits through any relay below
-v5.** On a network that still has v4 relays, those become unreachable rather than
-degrading quietly. That is deliberate — a silent fallback is the downgrade path the
-README says does not exist — but it means this branch is not a drop-in upgrade for
-one relay at a time.
 
 ## What changed, by area
 
@@ -42,8 +46,10 @@ from a diverse one. Constraints are enforced where candidates are filtered rathe
 than at each call site.
 
 ### Post-quantum handshake
-Hybrid PQ is mandatory with no configuration path to disable it; a config key that
-did so was added during the fixes and removed again for that reason. The vendored
+The downgrade path that let a circuit fall back from hybrid PQ to classical is
+closed, and the requirement is enforced where relay candidates are filtered rather
+than at four call sites that disagreed. (Removing the configuration key that can
+still switch it off is one of the two changes held back, above.) The vendored
 PQClean tree is byte-identical to upstream, and its `randombytes()` return value —
 discarded upstream, so an RNG failure was invisible — is handled by supplying
 MOOR's own `randombytes()` at the seam PQClean documents for integrators, not by
