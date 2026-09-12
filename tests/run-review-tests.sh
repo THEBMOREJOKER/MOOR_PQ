@@ -11,7 +11,8 @@
 #         F-15 (ML-KEM-768 and ML-DSA-65 against NIST vectors),
 #         F-06 (seccomp arch gate), F-10/F-11/F-19 (log redaction),
 #         F-09/F-18 (key store), F-20/F-21/F-27 (descriptor + consensus bounds),
-#         F-15 (the SOCKS5 request parser on its own).
+#         F-15 (the SOCKS5 request parser on its own),
+#         F-23 (the handshake deadline a slow peer cannot reset).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
@@ -112,6 +113,10 @@ if [ -d obj ] && [ -n "$(find obj -name '*.o' -print -quit 2>/dev/null)" ]; then
     # SOCKS5 request parser, split out of the handler 2026-09-12 (F-15).
     # shellcheck disable=SC2086
     run test_socks5_parse tests/test_socks5_parse.c $OBJS $SOD_LIB $EV_LIB $Z_LIB -lm -lpthread
+    # F-23: a dribbling peer must not hold a handshake thread. Timing-based, so
+    # it needs the whole library for moor_time_ms and the poll helper.
+    # shellcheck disable=SC2086
+    run test_handshake_deadline tests/test_handshake_deadline.c $OBJS $SOD_LIB $EV_LIB $Z_LIB -lm -lpthread
 else
     printf '\n=== test_descriptor_bounds ===\n  skipped: run make first (needs obj/*.o)\n'
 fi

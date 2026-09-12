@@ -175,6 +175,12 @@ int moor_connection_send_cell(moor_connection_t *conn,
 
 /* Receive a cell from an encrypted link.
  * Returns 1 if cell available, 0 if need more data, -1 on error. */
+/* Wait for fd to become readable, but never past an absolute deadline
+ * (milliseconds, on the moor_time_ms() clock). Returns > 0 readable, 0 out of
+ * time, < 0 on error. Used by the PQ handshake receive loops so a peer that
+ * never completes a cell cannot hold the thread (F-23). */
+int moor_conn_wait_readable_until(int fd, uint64_t deadline_ms);
+
 int moor_connection_recv_cell(moor_connection_t *conn, moor_cell_t *cell);
 
 /* Receive raw encrypted bytes from link (not cells).

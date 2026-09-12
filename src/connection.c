@@ -962,6 +962,29 @@ cleanup_server:
  * send/recv rotation helpers). Called once at handshake completion. */
 void moor_link_rekey_init(moor_connection_t *conn);
 
+/* Wait for fd to become readable, but never past an absolute deadline.
+ * Returns > 0 readable, 0 out of time, < 0 on error.
+ *
+ * F-23: the PQ handshake loops below receive a value that spans several cells,
+ * and they polled with a fresh MOOR_HANDSHAKE_TIMEOUT every time a read left a
+ * cell incomplete. A peer sending one byte just inside that window reset it
+ * indefinitely and kept the thread. relay.c already did this correctly -- one
+ * deadline before the loop, checked each time round -- so this is that pattern,
+ * with moor_time_ms() because it is monotonic and a wall clock can step. */
+int moor_conn_wait_readable_until(int fd, uint64_t deadline_ms)
+{
+    uint64_t now = moor_time_ms();
+    if (now >= deadline_ms) return 0;
+
+    uint64_t left = deadline_ms - now;
+    if (left > 60000) left = 60000;     /* re-check the deadline at least a minute apart */
+
+    struct pollfd pfd = { fd, POLLIN, 0 };
+    int pr = poll(&pfd, 1, (int)left);
+    if (pr < 0) return (errno == EINTR) ? 1 : -1;   /* interrupted: caller re-checks */
+    return pr;                                      /* 0 = the deadline arrived */
+}
+
 int link_handshake_client_pq(moor_connection_t *conn,
                               const uint8_t our_identity_pk[32],
                               const uint8_t our_identity_sk[64]) {
@@ -1007,15 +1030,18 @@ int link_handshake_client_pq(moor_connection_t *conn,
     /* Step 3: Receive kyber_ct through the AEAD cell channel */
     uint8_t kem_ct[MOOR_KEM_CT_LEN];
     size_t ct_total = 0;
+    /* F-23: one deadline for the whole multi-cell receive, not per cell. */
+    uint64_t ct_deadline = moor_time_ms() + (uint64_t)MOOR_HANDSHAKE_TIMEOUT * 1000;
     while (ct_total < MOOR_KEM_CT_LEN) {
         moor_cell_t kcell;
         int rr = 0;
         for (;;) {
             rr = moor_connection_recv_cell(conn, &kcell);
             if (rr != 0) break;
-            struct pollfd pfd = { conn->fd, POLLIN, 0 };
-            int pr = poll(&pfd, 1, MOOR_HANDSHAKE_TIMEOUT * 1000);
-            if (pr <= 0) { rr = -1; break; }
+            if (moor_conn_wait_readable_until(conn->fd, ct_deadline) <= 0) {
+                LOG_WARN("PQ hybrid: kyber_ct receive exceeded the handshake deadline");
+                rr = -1; break;
+            }
         }
         if (rr <= 0 || kcell.command != CELL_KEM_CT) {
             LOG_ERROR("PQ hybrid: recv kyber_ct cell failed");
@@ -1084,15 +1110,19 @@ int link_handshake_server_pq(moor_connection_t *conn,
     /* Step 2: Receive kyber_pk from client via AEAD cell channel */
     uint8_t kem_pk[MOOR_KEM_PK_LEN];
     size_t total = 0;
+    /* F-23: one deadline for the whole multi-cell receive, not per cell. This is
+     * the server side, so the peer holding the thread is an unauthenticated one. */
+    uint64_t pk_deadline = moor_time_ms() + (uint64_t)MOOR_HANDSHAKE_TIMEOUT * 1000;
     while (total < MOOR_KEM_PK_LEN) {
         moor_cell_t kcell;
         int rr = 0;
         for (;;) {
             rr = moor_connection_recv_cell(conn, &kcell);
             if (rr != 0) break;
-            struct pollfd pfd = { conn->fd, POLLIN, 0 };
-            int pr = poll(&pfd, 1, MOOR_HANDSHAKE_TIMEOUT * 1000);
-            if (pr <= 0) { rr = -1; break; }
+            if (moor_conn_wait_readable_until(conn->fd, pk_deadline) <= 0) {
+                LOG_WARN("PQ hybrid server: kyber_pk receive exceeded the handshake deadline");
+                rr = -1; break;
+            }
         }
         if (rr <= 0 || kcell.command != CELL_KEM_CT) {
             LOG_ERROR("PQ hybrid server: recv kyber_pk cell failed");
